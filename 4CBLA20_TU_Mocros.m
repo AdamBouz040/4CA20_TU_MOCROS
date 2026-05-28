@@ -8,16 +8,6 @@ Time vector= copy
 Idea; Create a code that recognizes a digits of a phone number based on frequency and dft as a bonus it tells you (based on the 1st 3 digits)
 From which country its from 
 Code; % ============================================================
-% DTMF PHONE NUMBER RECOGNITION USING FFT / DFT
-% Signals and Systems Project
-% ============================================================
-%
-% This project:
-% 1. Generates DTMF tones for phone digits
-% 2. Combines them into a phone number
-% 3. Uses FFT to detect frequencies
-% 4. Decodes the phone number automatically
-%
 % ============================================================
 
 clc;
@@ -28,16 +18,15 @@ close all;
 % PARAMETERS
 %% ============================================================
 
-fs = 8000;              % Sampling frequency
-tone_duration = 0.5;    % Tone duration (seconds)
-pause_duration = 0.1;   % Pause between digits
+             % Sampling frequency
+record_time = 18;        % Recording duration
 
 %% ============================================================
-% DTMF FREQUENCY TABLE
+% DTMF FREQUENCIES
 %% ============================================================
 
-DTMF.low = [697 770 852 941];
-DTMF.high = [1209 1336 1477];
+low_freqs = [697 770 852 941];
+high_freqs = [1209 1336 1477];
 
 keys = ['1','2','3';
         '4','5','6';
@@ -45,153 +34,170 @@ keys = ['1','2','3';
         '*','0','#'];
 
 %% ============================================================
-% INPUT PHONE NUMBER
+% RECORD AUDIO
 %% ============================================================
 
-phone_number = '52791';
+disp('========================================');
+disp('Play phone keypad tones now...');
+disp('Press digits slowly with pauses.');
+disp('========================================');
 
-disp(['Generating tones for number: ', phone_number]);
-
-%% ============================================================
-% GENERATE DTMF SIGNAL
-%% ============================================================
-
-full_signal = [];
-
-for k = 1:length(phone_number)
-
-    digit = phone_number(k);
-
-    % Find row and column of digit
-    [row,col] = find(keys == digit);
-
-    f1 = DTMF.low(row);
-    f2 = DTMF.high(col);
-
-    % Generate time vector
-    t = 0:1/fs:tone_duration;
-
-    % Generate DTMF tone
-    signal = sin(2*pi*f1*t) + sin(2*pi*f2*t);
-
-    % Append tone
-    full_signal = [full_signal signal];
-
-    % Add pause
-    full_signal = [full_signal ...
-                   zeros(1, round(pause_duration*fs))];
+[signal,fs] = audioread('WhatsApp Video 2026-05-28 at 16.39.53.mp4');
+if size(signal,2) > 1
+    signal = mean(signal, 2);
 end
 
-%% ============================================================
-% PLAY SIGNAL
-%% ============================================================
-
-disp('Playing DTMF tones...');
-sound(full_signal, fs);
+disp('Recording complete.');
 
 %% ============================================================
-% PLOT COMPLETE SIGNAL
+% NORMALIZE SIGNAL
+%% ============================================================
+
+signal = signal ./ max(abs(signal));
+
+%% ============================================================
+% PLOT SIGNAL
 %% ============================================================
 
 figure;
-plot(full_signal);
+plot(signal);
 
-title('DTMF Phone Number Signal');
+title('Recorded DTMF Signal');
 xlabel('Samples');
 ylabel('Amplitude');
 
 grid on;
 
 %% ============================================================
-% SPECTROGRAM
+% DETECT ACTIVE REGIONS
 %% ============================================================
 
-figure;
-spectrogram(full_signal,256,200,512,fs,'yaxis');
+threshold = 0.15;
 
-title('Spectrogram of DTMF Signal');
+active = abs(signal) > threshold;
+
+% Smooth detection manually
+window = 500;
+
+smooth_active = zeros(size(active));
+
+for i = window+1:length(active)-window
+
+    smooth_active(i) = ...
+        mean(active(i-window:i+window));
+
+end
+
+active = smooth_active > 0.1;
 
 %% ============================================================
-% SPLIT SIGNAL INTO DIGITS
+% FIND START/END POINTS
 %% ============================================================
 
-samples_per_digit = round((tone_duration + pause_duration)*fs);
+diff_signal = diff([0; active; 0]);
+
+start_points = find(diff_signal == 1);
+end_points = find(diff_signal == -1);
 
 decoded_number = '';
 
 %% ============================================================
-% FFT DECODING
+% PROCESS EACH TONE
 %% ============================================================
 
-for k = 1:length(phone_number)
+for i = 1:length(start_points)
 
-    % Extract one digit segment
-    start_index = (k-1)*samples_per_digit + 1;
+    start_idx = start_points(i);
+    end_idx = end_points(i);
 
-    end_index = start_index + ...
-                round(tone_duration*fs) - 1;
+    segment = signal(start_idx:end_idx);
 
-    segment = full_signal(start_index:end_index);
+    % Ignore short segments
+    if length(segment) < 2000
+        continue;
+    end
 
-    %% FFT
+    %% ========================================================
+    % FFT
+    %% ========================================================
+
     N = length(segment);
 
-    X = fft(segment,N);
-
-    freq = (0:N-1)*fs/N;
+    X = fft(segment);
 
     magnitude = abs(X);
 
-    %% Use only positive frequencies
+    freq = (0:N-1)*(fs/N);
+
+    %% ========================================================
+    % POSITIVE FREQUENCIES
+    %% ========================================================
+
     halfN = floor(N/2);
 
     freq_half = freq(1:halfN);
     mag_half = magnitude(1:halfN);
 
-    %% Find Peaks
-    [pks,locs] = findpeaks(mag_half,...
-                           'MinPeakHeight',max(mag_half)/4);
+    %% ========================================================
+    % SIMPLE PEAK DETECTION
+    %% ========================================================
 
-    detected_freqs = freq_half(locs);
+    [sorted_mag, sorted_idx] = sort(mag_half,'descend');
 
-    %% Find closest DTMF frequencies
-    low_detected = detected_freqs(detected_freqs < 1000);
-    high_detected = detected_freqs(detected_freqs > 1000);
+    detected_freqs = freq_half(sorted_idx(1:20));
 
-    if isempty(low_detected) || isempty(high_detected)
+    detected_freqs = unique(round(detected_freqs));
+
+    %% ========================================================
+    % FIND LOW + HIGH FREQUENCIES
+    %% ========================================================
+
+    low_candidates = detected_freqs( ...
+        detected_freqs > 650 & ...
+        detected_freqs < 1000);
+
+    high_candidates = detected_freqs( ...
+        detected_freqs > 1100 & ...
+        detected_freqs < 1600);
+
+    if isempty(low_candidates) || isempty(high_candidates)
         continue;
     end
 
-    low_freq = low_detected(1);
-    high_freq = high_detected(1);
+    low_freq = low_candidates(1);
+    high_freq = high_candidates(1);
 
-    %% Match frequencies
-    [~,row_index] = min(abs(DTMF.low - low_freq));
+    %% ========================================================
+    % MATCH TO DTMF TABLE
+    %% ========================================================
 
-    [~,col_index] = min(abs(DTMF.high - high_freq));
+    [~,row] = min(abs(low_freqs - low_freq));
 
-    %% Decode digit
-    digit_detected = keys(row_index,col_index);
+    [~,col] = min(abs(high_freqs - high_freq));
 
-    decoded_number = [decoded_number digit_detected];
+    digit = keys(row,col);
 
-    %% Display frequencies
-    fprintf('\nDigit %d\n',k);
+    decoded_number = [decoded_number digit];
 
-    fprintf('Detected Low Frequency: %.2f Hz\n', ...
-             low_freq);
+    %% ========================================================
+    % DISPLAY RESULTS
+    %% ========================================================
 
-    fprintf('Detected High Frequency: %.2f Hz\n', ...
-             high_freq);
+    fprintf('\nDetected Digit: %s\n',digit);
 
-    fprintf('Decoded Digit: %s\n',digit_detected);
+    fprintf('Low Frequency : %.2f Hz\n',low_freq);
 
-    %% Plot FFT of each digit
+    fprintf('High Frequency: %.2f Hz\n',high_freq);
+
+    %% ========================================================
+    % FFT PLOT
+    %% ========================================================
+
     figure;
 
     plot(freq_half,mag_half);
 
-    title(['FFT of Digit ',digit_detected]);
+    title(['FFT of Digit ',digit]);
 
     xlabel('Frequency (Hz)');
     ylabel('Magnitude');
@@ -201,66 +207,118 @@ for k = 1:length(phone_number)
 end
 
 %% ============================================================
-% FINAL RESULT
+% FINAL OUTPUT
 %% ============================================================
 
-fprintf('\n=================================\n');
+fprintf('\n=====================================\n');
 
-fprintf('Original Number : %s\n',phone_number);
-
-fprintf('Decoded Number  : %s\n',decoded_number);
-
-fprintf('=================================\n');
-
+fprintf('DETECTED PHONE NUMBER: %s\n',decoded_number);
 %% ============================================================
-% NOISE ROBUSTNESS TEST
+% COUNTRY DETECTION USING TXT FILE
 %% ============================================================
 
-noise_level = 0.2;
+fileID = fopen('country_codes.txt','r');
 
-noisy_signal = full_signal + ...
-               noise_level*randn(size(full_signal));
+country_found = 'Unknown Country';
+country_code_found = '';
 
-%% Plot noisy signal
+while ~feof(fileID)
+
+    line = fgetl(fileID);
+
+    data = strsplit(line, ',');
+
+    code = strtrim(data{1});
+    country = strtrim(data{2});
+
+    % Check if number starts with this code
+    if startsWith(decoded_number, code)
+
+        country_found = country;
+        country_code_found = code;
+
+    end
+
+end
+
+fclose(fileID);
+
+%% DISPLAY COUNTRY
+
+fprintf('\n=====================================\n');
+
+fprintf('Country Code: %s\n',country_code_found);
+
+fprintf('Detected Country: %s\n',country_found);
+
+fprintf('=====================================\n');
+
+fprintf('=====================================\n');
+
+%% ============================================================
+% SAVE AUDIO
+%% ============================================================
+
+audiowrite('recorded_dtmf.wav',signal,fs);
+
+disp('Audio saved.');
+
+%% ============================================================
+% NOISE TEST
+%% ============================================================
+
+noise_level = 0.1;
+
+noisy_signal = signal + ...
+               noise_level*randn(size(signal));
+
 figure;
 
 plot(noisy_signal);
 
-title('Noisy DTMF Signal');
+title('Noisy Signal');
 
 xlabel('Samples');
 ylabel('Amplitude');
 
 grid on;
 
-%% FFT of noisy signal
-N_noise = length(noisy_signal);
+%% ============================================================
+% FFT OF FULL SIGNAL
+%% ============================================================
 
-Y_noise = fft(noisy_signal);
+N_full = length(signal);
 
-freq_noise = (0:N_noise-1)*fs/N_noise;
+X_full = fft(signal);
 
-mag_noise = abs(Y_noise);
+mag_full = abs(X_full);
 
-%% Plot noisy FFT
+freq_full = (0:N_full-1)*(fs/N_full);
+
 figure;
 
-plot(freq_noise(1:N_noise/2), ...
-     mag_noise(1:N_noise/2));
+plot(freq_full(1:N_full/2), ...
+     mag_full(1:N_full/2));
 
-title('FFT of Noisy DTMF Signal');
+title('FFT of Full Recorded Signal');
 
 xlabel('Frequency (Hz)');
 ylabel('Magnitude');
 
+grid on;
 Results? 
 - Phone number should be displayed 
 - Failure experiments/ modes
 - Show 2 dominant frequency peaks 
 - FFt spectrum of multiple digits 
-- Change noise level and see if recognision accuracy increases 
+- Change noise level and see if recognition accuracy increases 
 - Change sampling frequency and look how sensitive the systems is 
-- Failure case/ background noise 
+- Failure case/ background noise can cause inaccuracy 
 
 
-grid on;
+
+X[k]=∑n=0N−1​x[n]e−j2πkn/N the convolution for this part 
+x(t)=sin(2πf1​t)+sin(2πf2​t) this is how each dtmf is generated 
+After FFT-based digit recognition, the system performs country identification using the first three decoded digits.
+
+
